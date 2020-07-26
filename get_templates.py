@@ -7,6 +7,9 @@ from pathlib import Path
 from io import StringIO
 from bs4 import BeautifulSoup
 import subprocess
+import os
+import shutil
+from jinja2 import Environment, FileSystemLoader
 
 '''
 run blast search to identify homologs
@@ -21,7 +24,7 @@ prepare input files for RosettaCM homology modeling
 3. align sequences
 4. make grishin
 5. partial thread
-6. write rosetta xml input 
+6. write rosetta xml input
 7. hybridize
 
 '''
@@ -43,7 +46,7 @@ def blast_seq(fasta):
     Args:
         fasta (str) : file with amino acid sequence for target protein
     '''
-    
+
     name = Path(fasta).stem
     out_name = f'outputs/{name}_blast.xml'
 
@@ -158,7 +161,8 @@ def clean_structure(pdb, chain):
     '''
 
     chain = chain.upper()
-    out_path = f'outputs/{pdb}_{chain}.pdb'
+    # no space between pdb and chain because of partial align requirement for 5 chars
+    out_path = f'outputs/{pdb}{chain}.pdb'
 
     if Path(out_path).exists():
         pass
@@ -225,23 +229,106 @@ def seq_align_hits(fasta, blast_df, n_templates):
     proc = subprocess.Popen(['mafft', hits_out_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     out, err = proc.communicate()
     out = out.decode('utf8')
-    
+
     # save alignment
     Path(aln_out_path).write_text(out)
 
 
 def write_grishin(fasta):
 
-    pass
+    '''convert msa to grishin format for rosetta partial threading
 
-def write_ros_xml(grishin):
+    Args:
+        fasta (str) : file with msa of hits
+    '''
 
-    pass
+    grish_template = '''
+## {target} {template}_thread
+#
+scores_from_program: 0
+0 {target_seq}
+0 {template_seq}
+--
+    '''
 
-def write_flags():
+    # get name of target and sequence
+    records = list(SeqIO.parse(fasta, 'fasta'))
+    target = records[0].name.replace('_', '')
+    target_seq = records[0].seq
 
-    pass
+    # loop over templates, align to target
+    # skip first, target
+    out = []
+    for i in range(1, len(records)):
+        template = records[i].name.replace('_', '')
+        template_seq = records[i].seq
+        grish = grish_template.format(target = target, template=template, target_seq = target_seq, template_seq=template_seq)
+        out.append(grish)
 
-def write_submission():
+    grish_out = ''.join(out)
+    name = fasta.split('_aligned')[0].split('/')[-1]
+    Path(f'outputs/{name}.gri').write_text(grish_out)
 
-    pass
+
+def run_partial_thread(fasta, align, templates):
+
+    '''run partial threading of aligned sequence onto template structures
+
+    Args:
+        fasta (str) : path for target protein fasta
+        align (str) : grishin format alignment for target to templates
+        templates (list) : list of pdb files for templates
+    '''
+
+    # list to str 
+    templates = [f'outputs/{x}' for x in templates]
+    templates = ' '.join(templates)
+
+    flags = f'''-in:file:fasta {fasta}
+-in:file:alignment outputs/{align}
+-in:file:template_pdb {templates}
+-ignore_unrecognized_res 1'''
+
+    flags_path = f'outputs/partial_thread_flags'
+    Path(flags_path).write_text(flags)
+
+    # run partial thread
+    # must export ROSETTA3 to install dir before
+    env = os.environ.copy()
+    ros = env['ROSETTA3']
+    subprocess.run([f'{ros}/bin/partial_thread.static.linuxgccrelease', f'@{flags_path}'])
+
+    # move threaded pdbs to outputs
+    threaded = Path().glob('*thread.pdb')
+    for pdb in threaded:
+        shutil.move(str(pdb), 'outputs')
+
+
+def write_hybridize_flags(fasta, nstruct=5):
+
+    '''write hybridize flag file and shell script to run rosetta script
+
+    Args:
+        fasta (str) : path for target protein fasta
+        nstruct (int) : number of modeling trajectories
+    '''
+
+    flags = f'''-default_max_cycles 200
+-nstruct {nstruct}
+-dualspace
+-in:file:fasta {fasta}
+-parser:protocol hyb_run.xml'''
+
+    name = Path(fasta).stem
+    Path(f'outputs/{name}_hyb_flags').write_text(flags)
+
+
+def write_hybridize_xml(templates):
+
+    # replace with jinja
+    env = Environment(loader=FileSystemLoader('input_templates'))
+    template = env.get_template('hyb.xml')
+
+    output = template.render(templates=templates)
+    Path('outputs', 'hyb_run.xml').write_text(output)
+

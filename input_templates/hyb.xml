@@ -1,0 +1,31 @@
+<ROSETTASCRIPTS>
+<SCOREFXNS>
+    <ScoreFunction name="stage1" weights="score3" symmetric="0">
+        <Reweight scoretype="atom_pair_constraint" weight="0.5"/>
+    </ScoreFunction>
+    <ScoreFunction name="stage2" weights="score4_smooth_cart" symmetric="0">
+        <Reweight scoretype="atom_pair_constraint" weight="0.5"/>
+    </ScoreFunction>
+    <ScoreFunction name="stage3" weights="ref2015_cart" symmetric="0">
+        <Reweight scoretype="atom_pair_constraint" weight="0.5"/>
+    </ScoreFunction>
+</SCOREFXNS>
+<MOVERS>
+<Hybridize name="hybridize" stage1_scorefxn="stage1" stage2_scorefxn="stage2" fa_scorefxn="stage3" batch="1" stage1_increase_cycles="1.0" stage2_increase_cycles="1.0" >
+
+    <!--Fragments three_mers="aat000_03_05.200_v1_3" nine_mers="aat000_09_05.200_v1_3"/-->
+
+    {% for template in templates -%}
+    <Template pdb="{{ template }}" cst_file="AUTO" weight="1.0" />
+    {% endfor %}
+
+</Hybridize>
+<FastRelax name="relax" scorefxn="stage3" bondangle="1" bondlength="1"/>
+
+</MOVERS>
+<PROTOCOLS>
+    <Add mover="hybridize"/>
+    <Add mover="relax"/>
+</PROTOCOLS>
+<OUTPUT scorefxn="stage3" />
+</ROSETTASCRIPTS>
