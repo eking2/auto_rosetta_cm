@@ -102,6 +102,13 @@ def parse_blast_xml(blast_xml):
         blast_xml (str) : blast xml file
     '''
 
+    # check if blast df already written
+    name = blast_xml.split('_')[0].split('/')[-1]
+    blast_df_path = f'outputs/{name}_blast_df.csv'
+    if Path(blast_df_path).exists():
+        print(f'{name} already to blast df')
+        return
+
     record = SearchIO.read(blast_xml, 'blast-xml')
 
     # initial query len
@@ -126,9 +133,8 @@ def parse_blast_xml(blast_xml):
 
     df = pd.DataFrame(to_save, columns=['pdb_id', 'chains', 'query_cov', 'seq_ident'])
 
-    name = blast_xml.split('_')[0].split('/')[-1]
     df['uniprot'] = df['pdb_id'].apply(get_uniprot)
-    df.to_csv(f'outputs/{name}_blast_df.csv', index=False)
+    df.to_csv(blast_df_path, index=False)
 
 
 def download_sequence(pdb):
@@ -184,12 +190,15 @@ def clean_structure(pdb, chain):
 
 def seq_align_hits(fasta, blast_df, n_templates):
 
-    '''download amino acid sequences for templates and mafft align
+    '''select templates from blast search, download amino acid sequences, and mafft align
 
     Args:
         fasta (str) : file with template amino acid sequence
         blast_df (str) : blast dataframe csv
         n_templates (int) : number of templates to use
+
+    Returns:
+        templates (list) : filenames for template pdbs
     '''
 
     # check if aligned fasta already written
@@ -197,7 +206,6 @@ def seq_align_hits(fasta, blast_df, n_templates):
     hits_out_path = f'outputs/{name}_hits.fasta'
     aln_out_path = f'outputs/{name}_aligned.fasta'
 
-    assert not Path(aln_out_path).exists(), f'already aligned {name}'
 
     # select n_templates to download, drop duplicates first
     df = pd.read_csv(blast_df)
@@ -207,8 +215,22 @@ def seq_align_hits(fasta, blast_df, n_templates):
     df = df.drop_duplicates(subset='uniprot')
     df = df.iloc[:n_templates]
 
+    # output selected
+    templates = []
+
+    for idx, row in df.iterrows():
+        templates.append(f"{row['pdb_id'].upper()}{row['chains'][0]}.pdb")
+
+    if Path(aln_out_path).exists():
+        print(f'already aligned {name}')
+        return templates
+
     # download structures and sequences
     records = []
+
+    # append template
+    records.append(SeqIO.read(fasta, 'fasta'))
+
     for _, row in df.iterrows():
         chain = row['chains'].split(',')[0]
 
@@ -220,6 +242,55 @@ def seq_align_hits(fasta, blast_df, n_templates):
         clean_structure(row['pdb_id'], chain)
 
         # to concat all fasta sequences
+        records.append(record)
+
+    # write out hits
+    SeqIO.write(records, hits_out_path, 'fasta')
+
+    # mafft align
+    proc = subprocess.Popen(['mafft', hits_out_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out, err = proc.communicate()
+    out = out.decode('utf8')
+
+    # save alignment
+    Path(aln_out_path).write_text(out)
+
+    return templates
+
+
+# can combine with seq_align_hits
+def seq_align_templates(fasta, templates):
+
+    '''download amino acid sequences for input templates and mafft align
+
+    Args:
+        fasta (str) : file with template amino acid sequence
+        templates (list) : names of templates and chain (ie. 4E5NA.pdb)
+    '''
+
+    # check if aligned fasta already written
+    name = fasta.split('.')[0]
+    hits_out_path = f'outputs/{name}_hits.fasta'
+    aln_out_path = f'outputs/{name}_aligned.fasta'
+
+    assert not Path(aln_out_path).exists(), f'already aligned {name}'
+
+    # download structures and sequences
+    records = []
+
+    # append template
+    records.append(SeqIO.read(fasta, 'fasta'))
+
+    for template in templates:
+
+        pdb = template[:4]
+        chain = template[4]
+
+        record = download_sequence(pdb)
+        record.id = f'{pdb}_{chain}'
+        record.description = ''
+
+        clean_structure(pdb, chain)
         records.append(record)
 
     # write out hits
@@ -270,22 +341,22 @@ scores_from_program: 0
     Path(f'outputs/{name}.gri').write_text(grish_out)
 
 
-def run_partial_thread(fasta, align, templates):
+def run_partial_thread(fasta, grish_aln, templates):
 
     '''run partial threading of aligned sequence onto template structures
 
     Args:
         fasta (str) : path for target protein fasta
-        align (str) : grishin format alignment for target to templates
+        grish_aln (str) : grishin format alignment for target to templates
         templates (list) : list of pdb files for templates
     '''
 
-    # list to str 
+    # list to str
     templates = [f'outputs/{x}' for x in templates]
     templates = ' '.join(templates)
 
     flags = f'''-in:file:fasta {fasta}
--in:file:alignment outputs/{align}
+-in:file:alignment {grish_aln}
 -in:file:template_pdb {templates}
 -ignore_unrecognized_res 1'''
 
@@ -322,8 +393,22 @@ def write_hybridize_flags(fasta, nstruct=5):
     name = Path(fasta).stem
     Path(f'outputs/{name}_hyb_flags').write_text(flags)
 
+    shell_cmd = f'$ROSETTA3/bin/rosetta_scripts.static.linuxgccrelease @{name}_hyb_flags'
+    Path('outputs/run_hybridize.sh').write_text(shell_cmd)
+
 
 def write_hybridize_xml(templates):
+
+    '''write rosetta script xml input with templates pdb files
+
+    Args:
+        templates (list) : list of template pdb files
+    '''
+
+    # add thread suffix
+    for i, template in enumerate(templates):
+        name = template.split('.')[0]
+        templates[i] = f'{name}_thread.pdb'
 
     # replace with jinja
     env = Environment(loader=FileSystemLoader('input_templates'))
