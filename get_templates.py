@@ -273,7 +273,9 @@ def seq_align_templates(fasta, templates):
     hits_out_path = f'outputs/{name}_hits.fasta'
     aln_out_path = f'outputs/{name}_aligned.fasta'
 
-    assert not Path(aln_out_path).exists(), f'already aligned {name}'
+    if Path(aln_out_path).exists():
+        print(f'already aligned {name}')
+        return
 
     # download structures and sequences
     records = []
@@ -283,8 +285,8 @@ def seq_align_templates(fasta, templates):
 
     for template in templates:
 
-        pdb = template[:4]
-        chain = template[4]
+        pdb = template.split('_')[0]
+        chain = template.split('_')[1]
 
         record = download_sequence(pdb)
         record.id = f'{pdb}_{chain}'
@@ -352,7 +354,7 @@ def run_partial_thread(fasta, grish_aln, templates):
     '''
 
     # list to str
-    templates = [f'outputs/{x}' for x in templates]
+    templates = [f'outputs/{x.replace("_", "")}' for x in templates]
     templates = ' '.join(templates)
 
     flags = f'''-in:file:fasta {fasta}
@@ -408,6 +410,7 @@ def write_hybridize_xml(templates):
     # add thread suffix
     for i, template in enumerate(templates):
         name = template.split('.')[0]
+        name = name.replace('_', '')
         templates[i] = f'{name}_thread.pdb'
 
     # replace with jinja

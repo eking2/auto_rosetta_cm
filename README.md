@@ -57,7 +57,7 @@ python main.py -f chmo.fasta cm -n 6
 
 Setup RosettaCM with manually input template structures
 ```
-python main.py -f chmo.fasta cm 3GWD_A 4RG3_A
+python main.py -f chmo.fasta cm -t 3GWD_A 4RG3_A
 ```
 
 

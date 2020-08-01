@@ -42,12 +42,12 @@ def run_blast(fasta):
 def run_cm_setup(fasta, templates, n_templates, n_decoys):
 
     '''perform blast search, select templates, and write inputs for rosetta cm'''
+    name = Path(fasta).stem
 
     # auto template selection
     if len(templates) == 0:
 
         # start with blast to select templates
-        name = Path(fasta).stem
         run_blast(fasta)
         blast_df = f'outputs/{name}_blast_df.csv'
 
